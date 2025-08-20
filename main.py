@@ -29,7 +29,7 @@ LIMIAR_LEADS = 40             # exige por turno: novos_leads > LIMIAR_LEADS
 MIN_PLANTAO_POR_MES = 4
 MAX_PLANTAO_POR_MES = 12
 
-GLPSOL_PATH = "glpsol"
+GLPSOL_PATH = "glpsol"   # caminho para glpsol (se instalado)
 CSV_IN = "PO_corretores.csv"
 CSV_OUT = "escala_mes.csv"
 # -----------------------------------------------------------------
@@ -92,7 +92,6 @@ def weekday_pt(weekday: int) -> str:
     return ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"][weekday]
 
 def main():
-    # flags locais (cópias das globais — podemos alterar localmente sem 'global')
     exigir_imoveis = EXIGIR_IMOVEIS
     exigir_postagens = EXIGIR_POSTAGENS
     exigir_vendas = EXIGIR_VENDAS
@@ -144,14 +143,13 @@ def main():
             print(f"[aviso] NÃO existe corretor com imoveis_captados >= {LIMIAR_IMOVEIS}. Desligando EXIGIR_IMOVEIS.")
             exigir_imoveis = False
 
-    # **LEADS é obrigatório por sua orientação**: se EXIGIR_LEADS True e não houver nenhum corretor com leads > LIMIAR_LEADS, abortamos com erro
+    # LEADS obrigatório
     if exigir_leads:
         tem_leads = [n for n in corretores if leads.get(n, 0) > LIMIAR_LEADS]
         if len(tem_leads) == 0:
             raise SystemExit(f"[erro] Requisito rígido: NÃO existe nenhum corretor com novos_leads > {LIMIAR_LEADS} no CSV. Ajuste CSV ou LIMIAR_LEADS.")
-        # caso haja, continuamos — a restrição por turno será adicionada ao modelo
 
-    # sanetizar nomes
+    # sanitizar nomes
     safe_by_real = {r: sanitize_name(r) for r in corretores}
     real_by_safe = {s: r for r, s in safe_by_real.items()}
     corretores_safe = list(real_by_safe.keys())
@@ -169,14 +167,17 @@ def main():
     if max_possible_assignments < total_needed:
         raise SystemExit("[erro] Impossível atender todos os plantões com o MAX_PLANTAO_POR_MES atual e número de corretores.")
 
-    # CRIAR MODELO
+    # CRIAR MODELO (minimizando o máximo de plantões por corretor)
     prob = pulp.LpProblem("Escalonamento_com_leads_por_turno", pulp.LpMinimize)
 
     # variáveis binárias
     x = pulp.LpVariable.dicts("x", (corretores_safe, range(n_turnos)), lowBound=0, upBound=1, cat="Binary")
 
-    # objetivo neutro (só satisfazer restrições)
-    prob += 0
+    # variável que representa o máximo de plantões por corretor (nome seguro)
+    MaxPlant = pulp.LpVariable("MaxPlant", lowBound=0, upBound=MAX_PLANTAO_POR_MES, cat="Integer")
+
+    # objetivo: minimizar o MaxPlant (minimax)
+    prob += MaxPlant
 
     # demanda por turno
     for ti in range(n_turnos):
@@ -203,17 +204,17 @@ def main():
         for ti in range(n_turnos):
             prob += pulp.lpSum([x[b][ti] for b in brokers_imoveis_safe]) >= 1
 
-    # NOVA: restrição LEADS por TURNO (obrigatória se EXIGIR_LEADS True)
+    # LEADS por turno (obrigatório)
     if exigir_leads:
         brokers_leads_safe = [safe_by_real[r] for r in corretores if leads.get(r, 0) > LIMIAR_LEADS]
-        # por segurança já testamos antes, então brokers_leads_safe terá elementos
         for ti in range(n_turnos):
             prob += pulp.lpSum([x[b][ti] for b in brokers_leads_safe]) >= 1
 
-    # min/max por corretor no mês
+    # min/max por corretor no mês e vínculo com MaxPlant
     for b in corretores_safe:
         prob += pulp.lpSum([x[b][ti] for ti in range(n_turnos)]) >= MIN_PLANTAO_POR_MES
         prob += pulp.lpSum([x[b][ti] for ti in range(n_turnos)]) <= MAX_PLANTAO_POR_MES
+        prob += pulp.lpSum([x[b][ti] for ti in range(n_turnos)]) <= MaxPlant
 
     # não trabalhar manhã+tarde no mesmo dia
     for b in corretores_safe:
@@ -231,15 +232,34 @@ def main():
             if idxs0 and idxs1:
                 prob += pulp.lpSum([x[b][ii] for ii in idxs0] + [x[b][ii] for ii in idxs1]) <= 1
 
-    # resolver com GLPK
-    solver = pulp.GLPK_CMD(path=GLPSOL_PATH, msg=True)
-    status = prob.solve(solver)
-    status_str = pulp.LpStatus[status]
+    # tentar resolver com GLPK; se falhar, fallback para CBC
+    status_str = None
+    try:
+        solver = pulp.GLPK_CMD(path=GLPSOL_PATH, msg=True)
+        status = prob.solve(solver)
+        status_str = pulp.LpStatus[status]
+    except Exception as e_glpk:
+        print("[aviso] GLPK falhou: tentarei CBC (fallback). Mensagem:", str(e_glpk))
+        try:
+            solver2 = pulp.PULP_CBC_CMD(msg=True)
+            status = prob.solve(solver2)
+            status_str = pulp.LpStatus[status]
+        except Exception as e_cbc:
+            print("[erro] Ambos GLPK e CBC falharam:", str(e_cbc))
+            return
+
     print("Status do solver:", status_str)
     if status_str not in ("Optimal", "Feasible"):
         print("[erro] O solver não encontrou solução viável com as restrições atuais.")
         print("Verifique limites MIN/MAX plantões, requisitos rígidos (postagens/vendas/imoveis/leads) e quantidade de corretores.")
         return
+
+    # imprimir valor mínimo de MaxPlant encontrado
+    try:
+        valM = int(round(pulp.value(MaxPlant)))
+        print(f"Máximo de plantões por corretor minimizado (MaxPlant): {valM}")
+    except Exception:
+        print("Não foi possível recuperar o valor de MaxPlant.")
 
     # construir saída
     rows = []

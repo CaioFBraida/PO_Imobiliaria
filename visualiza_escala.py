@@ -1,16 +1,4 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-visualiza_escala.py (versão reduzida)
-Gera:
-  - plantoes_por_corretor.png
-  - gantt_plantoes.png
-  - tabela_escala.png  (tabela Data x Turno com Assigned)
-  - summary_plantao.csv
 
-Uso:
-  python visualiza_escala.py --csv escala_mes.csv --outdir visuals
-"""
 import argparse
 import os
 from datetime import datetime
@@ -18,7 +6,6 @@ from collections import defaultdict
 
 import pandas as pd
 
-# tenta importar matplotlib; se não estiver, faz fallback (gera apenas CSV)
 HAS_MATPLOTLIB = True
 try:
     import matplotlib.pyplot as plt
@@ -104,41 +91,31 @@ def plot_gantt(plantao_dates, outdir):
     print(f"Gantt salvo: {out}")
 
 def plot_schedule_table(df, outdir):
-    """
-    Cria uma tabela com as colunas: Data | Manha | Tarde
-    Cada célula contém a string Assigned do CSV (ou '' se não houver turno)
-    Salva como tabela_escala.png usando matplotlib.table
-    """
     if not HAS_MATPLOTLIB:
         print("[skip] matplotlib não disponível — pulando tabela de escala.")
         return
 
-    # pivotar Data x Turno para Assigned
-    # Garantir que as datas estejam ordenadas
     df_p = df.copy()
     df_p["Data_str"] = df_p["Data"].dt.date.astype(str)
     pivot = df_p.pivot(index="Data_str", columns="Turno", values="Assigned")
-    # garantir as colunas Manha/Tarde na ordem
+    
     cols = []
     if "Manha" in pivot.columns:
         cols.append("Manha")
     if "Tarde" in pivot.columns:
         cols.append("Tarde")
-    # alguns dias (sábados) só têm Manha; manter isso
+    
     table_data = pivot[cols].fillna("").reset_index()
 
-    # construir figura com tabela
     nrows, ncols = table_data.shape
     fig_w = min(20, 0.6 * ncols + 8)
     fig_h = min(20, 0.25 * nrows + 4)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     ax.axis('off')
 
-    # construir cell text (list of lists)
     col_labels = table_data.columns.tolist()
     cell_text = table_data.values.tolist()
 
-    # criar a tabela; ajustar fontsize conforme número de linhas
     fontsize = max(6, int(12 - (nrows / 10)))
     tbl = ax.table(cellText=cell_text, colLabels=col_labels, loc='center', cellLoc='left')
     tbl.auto_set_font_size(False)
@@ -159,7 +136,6 @@ def main_visualize(csv_path, outdir):
     summary_df.to_csv(summary_csv, index=False, encoding='utf-8-sig')
     print(f"Resumo salvo: {summary_csv}")
 
-    # plotagens solicitadas
     plot_bars(summary_df, outdir)
     plot_gantt(plantao_dates, outdir)
     plot_schedule_table(df, outdir)
