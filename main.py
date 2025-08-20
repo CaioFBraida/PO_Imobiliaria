@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-main.py — Escalonador mensal usando GLPK (pulp).
-Coloque PO_corretores.csv na mesma pasta (colunas: Nome, comissao, imoveis_captados, postagens, novos_leads, vendas_realizadas).
-Edite as configurações no topo conforme necessário.
-"""
-
 import os
 import re
 import unicodedata
@@ -14,25 +6,24 @@ import datetime as dt
 import pandas as pd
 import pulp
 
-# ------------------ CONFIGURAÇÕES (EDITE AQUI) ------------------
-LIMIAR_SENIOR_K = 100          # threshold para senior (em milhares conforme seu CSV)
-EXIGIR_IMOVEIS = True         # exigir por turno corretores com imoveis_captados >= LIMIAR_IMOVEIS
-LIMIAR_IMOVEIS = 6
-EXIGIR_POSTAGENS = True       # exigir por turno corretores com postagens >= LIMIAR_POSTAGENS
-LIMIAR_POSTAGENS = 10
-EXIGIR_VENDAS = True          # exigir por turno corretores com vendas > LIMIAR_VENDAS
-LIMIAR_VENDAS = 4
-# Nova regra: leads por turno (obrigatória se EXIGIR_LEADS True)
+# CONFIGURAÇÕES 
+LIMIAR_SENIOR_K = 100       # Definiçaõ doq é sênior
+EXIGIR_IMOVEIS = True        
+LIMIAR_IMOVEIS = 6          # Definição limite de imóveis captados
+EXIGIR_POSTAGENS = True       
+LIMIAR_POSTAGENS = 10       # Definiçaõ do limite de postagens 
+EXIGIR_VENDAS = True          
+LIMIAR_VENDAS = 4           # Definiçaõ do limite de vendas
 EXIGIR_LEADS = True
-LIMIAR_LEADS = 40             # exige por turno: novos_leads > LIMIAR_LEADS
+LIMIAR_LEADS = 40           # Definiçaõ do limite de leads em contato/ captados
 
 MIN_PLANTAO_POR_MES = 4
 MAX_PLANTAO_POR_MES = 12
 
-GLPSOL_PATH = "glpsol"   # caminho para glpsol (se instalado)
+GLPSOL_PATH = "glpsol"   
 CSV_IN = "PO_corretores.csv"
 CSV_OUT = "escala_mes.csv"
-# -----------------------------------------------------------------
+# ---------------------------
 
 def sanitize_name(name: str) -> str:
     nfkd = unicodedata.normalize("NFKD", name)
@@ -74,14 +65,14 @@ def build_turnos_do_mes(ano: int, mes: int):
     dates_com_turno = []
     for d in range(1, ndays + 1):
         date = dt.date(ano, mes, d)
-        wd = date.weekday()  # 0=Seg ... 5=Sab ... 6=Dom
-        if wd <= 4:  # Segunda - Sexta -> Manhã e Tarde
+        wd = date.weekday()  
+        if wd <= 4: 
             for part in ("Manha", "Tarde"):
                 t = (date.isoformat(), part)
                 turnos.append(t)
                 req[t] = 3
             dates_com_turno.append(date.isoformat())
-        elif wd == 5:  # Sábado - apenas Manhã
+        elif wd == 5:  
             t = (date.isoformat(), "Manha")
             turnos.append(t)
             req[t] = 3
@@ -97,7 +88,6 @@ def main():
     exigir_vendas = EXIGIR_VENDAS
     exigir_leads = EXIGIR_LEADS
 
-    # entrada ano/mês
     try:
         ano = int(input("Digite o ano (ex: 2025): ").strip())
         mes = int(input("Digite o mês (1-12): ").strip())
@@ -117,14 +107,14 @@ def main():
     leads = dict(zip(df["Nome"], df["novos_leads"]))
     vendas = dict(zip(df["Nome"], df["vendas_realizadas"]))
 
-    # seniors
+    # Nesse ponto nós selecionamos os seneiors baseado na nossa variável nas configurações, assim como os corretores 
+    # dentro das outras regras
     seniors = [n for n, c in comissao.items() if c >= LIMIAR_SENIOR_K]
     if len(seniors) == 0:
         top = max(comissao.items(), key=lambda x: x[1])[0]
         seniors = [top]
         print(f"[aviso] nenhum corretor com comissão >= {LIMIAR_SENIOR_K}k. Marcando '{top}' como senior provisório.")
 
-    # validar requisitos por turno (se for impossível, desligamos apenas as exigências opcionais EXIGIR_*)
     if exigir_vendas:
         tem_vendas = [n for n in corretores if vendas.get(n, 0) > LIMIAR_VENDAS]
         if len(tem_vendas) == 0:
@@ -143,13 +133,12 @@ def main():
             print(f"[aviso] NÃO existe corretor com imoveis_captados >= {LIMIAR_IMOVEIS}. Desligando EXIGIR_IMOVEIS.")
             exigir_imoveis = False
 
-    # LEADS obrigatório
     if exigir_leads:
         tem_leads = [n for n in corretores if leads.get(n, 0) > LIMIAR_LEADS]
         if len(tem_leads) == 0:
             raise SystemExit(f"[erro] Requisito rígido: NÃO existe nenhum corretor com novos_leads > {LIMIAR_LEADS} no CSV. Ajuste CSV ou LIMIAR_LEADS.")
 
-    # sanitizar nomes
+    # tirar caracteres especiais dos nomes
     safe_by_real = {r: sanitize_name(r) for r in corretores}
     real_by_safe = {s: r for r, s in safe_by_real.items()}
     corretores_safe = list(real_by_safe.keys())
@@ -167,7 +156,7 @@ def main():
     if max_possible_assignments < total_needed:
         raise SystemExit("[erro] Impossível atender todos os plantões com o MAX_PLANTAO_POR_MES atual e número de corretores.")
 
-    # CRIAR MODELO (minimizando o máximo de plantões por corretor)
+    # Criando modelo aqui, minimizando o máximo de plantões por corretor
     prob = pulp.LpProblem("Escalonamento_com_leads_por_turno", pulp.LpMinimize)
 
     # variáveis binárias
@@ -188,7 +177,7 @@ def main():
         if seniors_safe:
             prob += pulp.lpSum([x[b][ti] for b in seniors_safe]) >= 1
 
-    # restrições por atributo por turno (se ativadas)
+    # restrições por atributo por turno 
     if exigir_vendas:
         brokers_vendas_safe = [safe_by_real[r] for r in corretores if vendas.get(r, 0) > LIMIAR_VENDAS]
         for ti in range(n_turnos):
@@ -239,14 +228,7 @@ def main():
         status = prob.solve(solver)
         status_str = pulp.LpStatus[status]
     except Exception as e_glpk:
-        print("[aviso] GLPK falhou: tentarei CBC (fallback). Mensagem:", str(e_glpk))
-        try:
-            solver2 = pulp.PULP_CBC_CMD(msg=True)
-            status = prob.solve(solver2)
-            status_str = pulp.LpStatus[status]
-        except Exception as e_cbc:
-            print("[erro] Ambos GLPK e CBC falharam:", str(e_cbc))
-            return
+        print("[aviso] GLPK falhou: Mensagem:", str(e_glpk))
 
     print("Status do solver:", status_str)
     if status_str not in ("Optimal", "Feasible"):
