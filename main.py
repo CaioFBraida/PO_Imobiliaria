@@ -18,7 +18,7 @@ EXIGIR_LEADS = True
 LIMIAR_LEADS = 40           # Definiçaõ do limite de leads em contato/ captados
 
 MIN_PLANTAO_POR_MES = 4
-MAX_PLANTAO_POR_MES = 12
+MAX_PLANTAO_POR_MES = 16
 
 GLPSOL_PATH = "glpsol"   
 CSV_IN = "PO_corretores.csv"
@@ -156,19 +156,19 @@ def main():
     if max_possible_assignments < total_needed:
         raise SystemExit("[erro] Impossível atender todos os plantões com o MAX_PLANTAO_POR_MES atual e número de corretores.")
 
-    # Criando modelo aqui, minimizando o máximo de plantões por corretor
+    # Criando problema e inficando minimização nessa parte aqui, nós usamos essa bibliotec pulp
     prob = pulp.LpProblem("Escalonamento_com_leads_por_turno", pulp.LpMinimize)
 
-    # variáveis binárias
+    # variaveis binárias
     x = pulp.LpVariable.dicts("x", (corretores_safe, range(n_turnos)), lowBound=0, upBound=1, cat="Binary")
 
-    # variável que representa o máximo de plantões por corretor (nome seguro)
+    # variavel q representa o máximo de plantões por corretor
     MaxPlant = pulp.LpVariable("MaxPlant", lowBound=0, upBound=MAX_PLANTAO_POR_MES, cat="Integer")
 
-    # objetivo: minimizar o MaxPlant (minimax)
+    # minimizar o MaxPlant 
     prob += MaxPlant
 
-    # demanda por turno
+    # demanda por turno,  3 em cada
     for ti in range(n_turnos):
         prob += pulp.lpSum([x[b][ti] for b in corretores_safe]) == req[turnos[ti]]
 
@@ -177,7 +177,7 @@ def main():
         if seniors_safe:
             prob += pulp.lpSum([x[b][ti] for b in seniors_safe]) >= 1
 
-    # restrições por atributo por turno 
+    # restrições por atributo por turno, cria variáveis em formato de lista antes de adicioanar também
     if exigir_vendas:
         brokers_vendas_safe = [safe_by_real[r] for r in corretores if vendas.get(r, 0) > LIMIAR_VENDAS]
         for ti in range(n_turnos):
@@ -193,7 +193,6 @@ def main():
         for ti in range(n_turnos):
             prob += pulp.lpSum([x[b][ti] for b in brokers_imoveis_safe]) >= 1
 
-    # LEADS por turno (obrigatório)
     if exigir_leads:
         brokers_leads_safe = [safe_by_real[r] for r in corretores if leads.get(r, 0) > LIMIAR_LEADS]
         for ti in range(n_turnos):
@@ -221,7 +220,7 @@ def main():
             if idxs0 and idxs1:
                 prob += pulp.lpSum([x[b][ii] for ii in idxs0] + [x[b][ii] for ii in idxs1]) <= 1
 
-    # tentar resolver com GLPK; se falhar, fallback para CBC
+    # resolver com GLPK
     status_str = None
     try:
         solver = pulp.GLPK_CMD(path=GLPSOL_PATH, msg=True)
@@ -236,14 +235,13 @@ def main():
         print("Verifique limites MIN/MAX plantões, requisitos rígidos (postagens/vendas/imoveis/leads) e quantidade de corretores.")
         return
 
-    # imprimir valor mínimo de MaxPlant encontrado
     try:
         valM = int(round(pulp.value(MaxPlant)))
         print(f"Máximo de plantões por corretor minimizado (MaxPlant): {valM}")
     except Exception:
         print("Não foi possível recuperar o valor de MaxPlant.")
 
-    # construir saída
+    # aqui construimos o output
     rows = []
     for ti, (date_iso, part) in enumerate(turnos):
         alloc_safe = [b for b in corretores_safe if pulp.value(x[b][ti]) is not None and round(pulp.value(x[b][ti])) == 1]
